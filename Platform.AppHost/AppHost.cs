@@ -12,5 +12,6 @@ builder.AddProject<Projects.Deals_Api>("deals-api")
 
 var catalogDb = builder.AddConnectionString("CatalogDb");
 builder.AddProject<Projects.Catalog_Api>("catalog-api").WithReference(catalogDb);
+builder.AddProject<Projects.Reviews_WebApi>("reviews-api");
 
 builder.Build().Run();

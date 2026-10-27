@@ -202,3 +202,46 @@ dotnet ef migrations script --project Services/Catalog/Catalog.Dal --startup-pro
 | GET | `/api/Properties/by-amenity?amenity=Паркінг&since=2020-01-01` | 200, 400 |
 
 Знімки екрана: `docs/` (Swagger, пагінація, 400, 409, 404, логи SQL для eager і explicit).
+
+Лаб. 04: Reviews, Clean Architecture + CQRS (MediatR) + MongoDB
+Мікросервіс Reviews (Проєкт 3 з Лаб. 1) розділено на 4 шари за принципом Clean Architecture. Залежності спрямовані лише всередину.
+```
+Reviews.WebApi  ──►  Reviews.Application  ──►  Reviews.Domain
+      │                      ▲
+      └─► Reviews.Infrastructure ─┘  (реалізує інтерфейси Application/Domain)
+```
+Шар	Відповідальність	Залежить від
+`Services/Reviews/Reviews.Domain`	Сутності (`Review`, `Comment`), Value Objects (`Author`, `Criteria`), винятки, `IReviewRepository`	лише `MongoDB.Bson` (ObjectId)
+`Services/Reviews/Reviews.Application`	CQRS-команди/запити (MediatR), валідатори (FluentValidation), Pipeline Behaviors, AutoMapper, `IReviewQueries`, `Caching/`	Domain
+`Services/Reviews/Reviews.Infrastructure`	MongoDB: `BsonClassMap`, репозиторій, читання (проєкції/агрегації), seed, автоматичні індекси	Application, Domain
+`Services/Reviews/Reviews.WebApi`	Тонкий контролер (`ISender`), `GlobalExceptionHandler` (ProblemDetails), Swagger	Application, Infrastructure (лише DI)
+CQRS
+Команди (змінюють стан): `CreateReviewCommand`, `UpdateReviewCommand`, `AddCommentCommand`, `DeleteReviewCommand`.
+Запити (читають): `GetReviewByIdQuery`, `GetReviewsListQuery` (фільтри `productId`, `minRating`, `search`, пагінація).
+Pipeline: `LoggingBehavior` → `ValidationBehavior` → `PerformanceBehavior` → handler. Якщо валідація не пройшла, handler не викликається (видно в логах).
+MongoDB
+База `ReviewsDb`, колекція `reviews`. Відображення через `BsonClassMap` (без атрибутів у Domain), `author` і `criteria` вбудовані документи, `comments` масив.
+Оптимістична конкурентність: поле `version`, `ReplaceOne` з фільтром за версією; при розбіжності `409 Conflict`.
+Індекси (створюються автоматично при старті): `ix_product_createdAt` (productId ↑, createdAt ↓), `ix_text` (text), `ux_product_author` (унікальний productId + author.userId).
+Seed ідемпотентний: виконується лише якщо колекція порожня.
+Зв'язок з Лаб. 1 (`EstateHub_Activity.Reviews`, `db/p3`): ті самі поля за змістом (об'єкт, автор, rating 1..5, text, criteria, comments, дати). У Лаб. 4 ідентифікатор `ObjectId`, а `author` це вбудований Value Object; окрема БД `ReviewsDb`, тому строга схема Лаб. 1 не конфліктує.
+Коди відповідей
+Ситуація	Код
+Помилка валідації / бізнес-правила	400 (ProblemDetails з переліком помилок)
+Відгук не знайдено	404
+Конфлікт версій, дублікат (унікальний індекс)	409
+MongoDB недоступна	503
+Запуск
+Запустіть MongoDB: `docker run -d --name mongo -p 27017:27017 mongo:7` (або локальний `mongod`).
+`dotnet build Platform.slnx`
+`dotnet test Services/Reviews/Reviews.Tests`
+`dotnet run --project Services/Reviews/Reviews.WebApi` і відкрити `http://localhost:5300/swagger`.
+Перевірка індексів у mongosh: `use ReviewsDb` → `db.reviews.getIndexes()`.
+
+### Скріншоти
+![Swagger](docs/01-swagger.png)
+![Compass](docs/02-compass-reviews.png)
+![Індекси](docs/03-indexes.png)
+![Валідація 400](docs/04-validation-400.png)
+![Лог валідації](docs/05-validation-log.png)
+![Конфлікт 409](docs/06-conflict-409.png)

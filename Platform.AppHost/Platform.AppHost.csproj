@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Services\Deals\Deals.Api\Deals.Api.csproj" />
     <ProjectReference Include="..\Services\Catalog\Catalog.Api\Catalog.Api.csproj" />
+    <ProjectReference Include="..\Services\Reviews\Reviews.WebApi\Reviews.WebApi.csproj" />
   </ItemGroup>
 
   <ItemGroup>
