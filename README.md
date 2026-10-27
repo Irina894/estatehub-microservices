@@ -239,9 +239,9 @@ MongoDB недоступна	503
 Перевірка індексів у mongosh: `use ReviewsDb` → `db.reviews.getIndexes()`.
 
 ### Скріншоти
-![Swagger](docs/01-swagger.png)
-![Compass](docs/02-compass-reviews.png)
-![Індекси](docs/03-indexes.png)
-![Валідація 400](docs/04-validation-400.png)
-![Лог валідації](docs/05-validation-log.png)
-![Конфлікт 409](docs/06-conflict-409.png)
+![Swagger](docs/lab04/01-swagger.png)
+![Compass](docs/lab04/02-compass-reviews.png)
+![Індекси](docs/lab04/03-indexes.png)
+![Валідація 400](docs/lab04/04-validation-400.png)
+![Лог валідації](docs/lab04/05-validation-log.png)
+![Конфлікт 409](docs/lab04/06-conflict-409.png)
