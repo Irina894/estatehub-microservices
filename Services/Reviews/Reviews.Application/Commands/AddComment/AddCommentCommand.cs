@@ -18,7 +18,7 @@ public sealed class AddCommentCommandValidator : AbstractValidator<AddCommentCom
     {
         RuleFor(x => x.ReviewId).Must(id => ObjectId.TryParse(id, out _)).WithMessage("Id має бути коректним ObjectId.");
         RuleFor(x => x.AuthorId).GreaterThan(0);
-        RuleFor(x => x.Text).NotEmpty().MaximumLength(1000);
+        RuleFor(x => x.Text).NotEmpty().MaximumLength(Comment.TextMaxLength);
     }
 }
 

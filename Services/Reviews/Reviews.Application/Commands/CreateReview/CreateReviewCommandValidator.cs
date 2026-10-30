@@ -1,4 +1,5 @@
 using FluentValidation;
+using Reviews.Domain.Entities;
 using Reviews.Domain.Interfaces;
 
 namespace Reviews.Application.Commands.CreateReview;
@@ -12,7 +13,7 @@ public sealed class CreateReviewCommandValidator : AbstractValidator<CreateRevie
         RuleFor(x => x.AuthorUserId).GreaterThan(0);
         RuleFor(x => x.AuthorDisplayName).NotEmpty().MaximumLength(100);
         RuleFor(x => x.Rating).InclusiveBetween(1, 5);
-        RuleFor(x => x.Text).NotEmpty().MaximumLength(2000);
+        RuleFor(x => x.Text).NotEmpty().MaximumLength(Review.TextMaxLength);
 
         When(x => x.Criteria is not null, () =>
         {

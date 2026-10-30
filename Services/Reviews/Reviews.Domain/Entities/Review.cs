@@ -8,7 +8,11 @@ namespace Reviews.Domain.Entities;
 /// <summary>Агрегат «Відгук» про об'єкт нерухомості. Інваріанти перевіряються в самій сутності.</summary>
 public sealed class Review : BaseEntity
 {
-    private readonly List<Comment> _comments = new();
+    public const int TextMaxLength = 2000;
+    public const int MaxComments = 50;
+
+    // не readonly: драйвер MongoDB пропускає readonly-поля під час читання документа
+    private List<Comment> _comments = new();
 
     public long ProductId { get; private set; }
     public string ProductName { get; private set; } = default!;
@@ -43,6 +47,8 @@ public sealed class Review : BaseEntity
 
     public void AddComment(long authorId, string text)
     {
+        if (_comments.Count >= MaxComments)
+            throw new DomainException($"Відгук може мати не більше {MaxComments} коментарів.");
         _comments.Add(new Comment(authorId, text));
         Touch();
     }
@@ -56,7 +62,7 @@ public sealed class Review : BaseEntity
     private void SetText(string text)
     {
         if (string.IsNullOrWhiteSpace(text)) throw new DomainException("Текст відгуку не може бути порожнім.");
-        if (text.Length > 2000) throw new DomainException("Текст відгуку не може перевищувати 2000 символів.");
+        if (text.Length > TextMaxLength) throw new DomainException($"Текст відгуку не може перевищувати {TextMaxLength} символів.");
         Text = text.Trim();
     }
 }
