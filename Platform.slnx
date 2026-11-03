@@ -1,0 +1,24 @@
+<Solution>
+  <Folder Name="/Services/" />
+  <Folder Name="/Services/Catalog/">
+    <Project Path="Services/Catalog/Catalog.Api/Catalog.Api.csproj" />
+    <Project Path="Services/Catalog/Catalog.Bll/Catalog.Bll.csproj" />
+    <Project Path="Services/Catalog/Catalog.Dal/Catalog.Dal.csproj" />
+    <Project Path="Services/Catalog/Catalog.Domain/Catalog.Domain.csproj" />
+    <Project Path="Services/Catalog/Catalog.Tests/Catalog.Tests.csproj" />
+  </Folder>
+  <Folder Name="/Services/Deals/">
+    <Project Path="Services/Deals/Deals.Api/Deals.Api.csproj" />
+    <Project Path="Services/Deals/Deals.Bll/Deals.Bll.csproj" />
+    <Project Path="Services/Deals/Deals.Dal/Deals.Dal.csproj" />
+    <Project Path="Services/Deals/Deals.Domain/Deals.Domain.csproj" />
+  </Folder>
+  <Folder Name="/Services/Reviews/">
+    <Project Path="Services/Reviews/Reviews.Application/Reviews.Application.csproj" />
+    <Project Path="Services/Reviews/Reviews.Domain/Reviews.Domain.csproj" />
+    <Project Path="Services/Reviews/Reviews.Infrastructure/Reviews.Infrastructure.csproj" />
+    <Project Path="Services/Reviews/Reviews.Tests/Reviews.Tests.csproj" />
+    <Project Path="Services/Reviews/Reviews.WebApi/Reviews.WebApi.csproj" />
+  </Folder>
+  <Project Path="Platform.AppHost/Platform.AppHost.csproj" />
+</Solution>
