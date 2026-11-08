@@ -5,11 +5,12 @@ using Catalog.Dal.Repositories;
 using Catalog.Domain.Entities;
 using Catalog.Domain.Enums;
 using Catalog.Domain.Exceptions;
+using Microsoft.Extensions.Logging;
 
 namespace Catalog.Bll.Services;
 
 // Сервіс працює ТІЛЬКИ через IUnitOfWork (DbContext напряму не використовується)
-public class PropertyService(IUnitOfWork uow, IMapper mapper) : IPropertyService
+public class PropertyService(IUnitOfWork uow, IMapper mapper, ILogger<PropertyService> logger) : IPropertyService
 {
     public async Task<PagedResult<PropertyDto>> GetPagedAsync(PropertyQuery query, CancellationToken ct = default)
     {
@@ -73,6 +74,7 @@ public class PropertyService(IUnitOfWork uow, IMapper mapper) : IPropertyService
         var property = await GetTrackedAsync(id, ct);
         property.ChangePrice(dto.Price);
         await uow.SaveChangesAsync(ct);
+        logger.LogInformation("Property {PropertyId} price changed to {Amount}", id, dto.Price);
     }
 
     public async Task ChangeStatusAsync(Guid id, ChangeStatusDto dto, CancellationToken ct = default)
@@ -81,6 +83,7 @@ public class PropertyService(IUnitOfWork uow, IMapper mapper) : IPropertyService
         var status = Enum.Parse<PropertyStatus>(dto.Status, ignoreCase: true);   // формат уже перевірив валідатор
         property.ChangeStatus(status);                                           // DomainException при забороненому переході
         await uow.SaveChangesAsync(ct);
+        logger.LogInformation("Property {PropertyId} status changed to {Status}", id, status);
     }
 
     public async Task DeleteAsync(Guid id, CancellationToken ct = default)

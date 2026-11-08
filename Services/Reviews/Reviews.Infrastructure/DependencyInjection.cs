@@ -14,6 +14,14 @@ public static class DependencyInjection
         MongoMappings.Register();
 
         services.Configure<MongoDbOptions>(configuration.GetSection(MongoDbOptions.SectionName));
+
+        // Aspire передає рядок підключення як ConnectionStrings:ReviewsDb і має пріоритет;
+        // без Aspire лишається MongoDb:ConnectionString з appsettings.json.
+        services.PostConfigure<MongoDbOptions>(o =>
+        {
+            var fromAspire = configuration.GetConnectionString("ReviewsDb");
+            if (!string.IsNullOrWhiteSpace(fromAspire)) o.ConnectionString = fromAspire;
+        });
         services.AddSingleton<MongoDbContext>();
 
         services.AddScoped<IReviewRepository, ReviewRepository>();

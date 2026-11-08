@@ -1,9 +1,12 @@
 using Reviews.Application;
 using Reviews.Infrastructure;
 using Reviews.Infrastructure.Seeding;
+using Platform.ServiceDefaults;
 using Reviews.WebApi.ExceptionHandling;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.AddServiceDefaults();   // Serilog, OpenTelemetry, health checks, service discovery (Лаб. 5)
 
 builder.Services.AddApplication();
 builder.Services.AddInfrastructure(builder.Configuration);
@@ -17,12 +20,15 @@ builder.Services.AddSwaggerGen();
 
 var app = builder.Build();
 
+app.UseMiddleware<CorrelationIdMiddleware>();
+
 app.UseExceptionHandler();
 
 app.UseSwagger();
 app.UseSwaggerUI();
 
 app.MapControllers();
+app.MapDefaultEndpoints();
 
 // Початкові дані (ідемпотентно). Якщо MongoDB не запущена, додаток все одно стартує.
 using (var scope = app.Services.CreateScope())

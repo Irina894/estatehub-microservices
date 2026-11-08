@@ -1,19 +1,17 @@
 using Catalog.Api.ExceptionHandling;
-using Catalog.Api.Middleware;
 using Catalog.Bll;
 using Catalog.Dal;
 using Catalog.Dal.Repositories;
 using Catalog.Dal.Seeding;
 using Microsoft.EntityFrameworkCore;
+using Platform.ServiceDefaults;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ---- Serilog: налаштування в appsettings.json (Console + File, SQL-команди EF) ----
-builder.Host.UseSerilog((ctx, services, cfg) => cfg
-    .ReadFrom.Configuration(ctx.Configuration)
-    .ReadFrom.Services(services)
-    .Enrich.FromLogContext());
+// Serilog, OpenTelemetry, health checks, service discovery - спільні для платформи (Лаб. 5).
+// Власну конфігурацію Serilog з Лаб. 3 прибрано, бо її замінює ServiceDefaults.
+builder.AddServiceDefaults();
 
 // ---- DAL ----
 var connectionString = builder.Configuration.GetConnectionString("CatalogDb")
@@ -37,7 +35,7 @@ builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 var app = builder.Build();
 
 // ---- Pipeline (порядок важливий) ----
-app.UseMiddleware<CorrelationIdMiddleware>();   // 1) щоб CorrelationId був у всіх логах
+app.UseMiddleware<CorrelationIdMiddleware>();   // 1) спільний CorrelationId з ServiceDefaults - у всіх логах
 app.UseSerilogRequestLogging();                  // 2) один структурований лог на запит
 app.UseExceptionHandler();                       // 3) ловить винятки з контролерів -> ProblemDetails
 
@@ -48,6 +46,7 @@ if (app.Environment.IsDevelopment())
 }
 
 app.MapControllers();
+app.MapDefaultEndpoints();
 
 // ---- Міграції та сідінг (вимкнено в Production) ----
 if (!app.Environment.IsProduction())

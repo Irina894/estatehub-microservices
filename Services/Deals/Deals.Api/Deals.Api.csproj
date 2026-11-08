@@ -14,6 +14,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Deals.Bll\Deals.Bll.csproj" />
+    <ProjectReference Include="..\..\..\Platform.ServiceDefaults\Platform.ServiceDefaults.csproj" />
   </ItemGroup>
 
 </Project>

@@ -1,8 +1,10 @@
+using System.Diagnostics;
 using AutoMapper;
 using Deals.Bll.DTOs;
 using Deals.Domain.Exceptions;
 using Deals.Domain.Interfaces;
 using Deals.Domain.Models;
+using Microsoft.Extensions.Logging;
 
 namespace Deals.Bll.Services;
 
@@ -23,8 +25,11 @@ public interface IApplicationService
     Task<IReadOnlyList<ViewingDto>> GetViewingsAsync(Guid id);
 }
 
-public class ApplicationService(IUnitOfWork uow, IMapper mapper) : IApplicationService
+public class ApplicationService(IUnitOfWork uow, IMapper mapper, ILogger<ApplicationService> logger) : IApplicationService
 {
+    // власні spans бізнес-операцій; джерело "EstateHub.*" підписує ServiceDefaults
+    private static readonly ActivitySource Source = new("EstateHub.Deals");
+
     // ---------- CRUD ----------
 
     public async Task<ApplicationDto> CreateAsync(CreateApplicationDto dto)
@@ -44,6 +49,9 @@ public class ApplicationService(IUnitOfWork uow, IMapper mapper) : IApplicationS
             CreatedBy = null
         };
         await uow.Applications.AddAsync(app);
+        logger.LogInformation(
+            "Application {ApplicationId} created for property {PropertyId}, client {ClientId}, price {Amount}, status {Status}",
+            app.Id, app.PropertyId, app.ClientId, app.PriceSnapshot, app.Status);
         return mapper.Map<ApplicationDto>(await GetEntityAsync(app.Id));
     }
 
@@ -93,6 +101,7 @@ public class ApplicationService(IUnitOfWork uow, IMapper mapper) : IApplicationS
                     "Use POST /approve to approve and POST /contract to complete an application.");
 
             await SetStatusAsync(app, dto.Status, dto.RowVersion);
+            logger.LogInformation("Application {ApplicationId} status changed to {Status}", id, dto.Status);
             return true;
         });
         return await GetAsync(id);
@@ -102,6 +111,8 @@ public class ApplicationService(IUnitOfWork uow, IMapper mapper) : IApplicationS
 
     public async Task<ViewingDto> ApproveAsync(Guid id, ApproveApplicationDto dto)
     {
+        using var activity = Source.StartActivity("ApproveApplication");
+        activity?.SetTag("application.id", id);
         return await uow.ExecuteInTransactionAsync(async () =>
         {
             var app = await GetEntityAsync(id);
@@ -127,6 +138,9 @@ public class ApplicationService(IUnitOfWork uow, IMapper mapper) : IApplicationS
                 Status = "scheduled"
             };
             await uow.Viewings.AddAsync(viewing);
+            logger.LogInformation(
+                "Application {ApplicationId} approved, viewing {ViewingId} scheduled for {ViewingDate}, realtor {RealtorId}, status {Status}",
+                app.Id, viewing.Id, viewing.Date, realtor.Id, ApplicationStatuses.Approved);
             return mapper.Map<ViewingDto>(viewing);
         });
     }
@@ -135,6 +149,8 @@ public class ApplicationService(IUnitOfWork uow, IMapper mapper) : IApplicationS
 
     public async Task<ContractDto> SignContractAsync(Guid id, SignContractDto dto)
     {
+        using var activity = Source.StartActivity("SignContract");
+        activity?.SetTag("application.id", id);
         return await uow.ExecuteInTransactionAsync(async () =>
         {
             var app = await GetEntityAsync(id);
@@ -154,6 +170,9 @@ public class ApplicationService(IUnitOfWork uow, IMapper mapper) : IApplicationS
                 SignedAt = DateTime.UtcNow
             };
             await uow.Contracts.AddAsync(contract);
+            logger.LogInformation(
+                "Contract {ContractId} signed for application {ApplicationId}, final price {Amount}, status {Status}",
+                contract.Id, app.Id, contract.FinalPrice, ApplicationStatuses.Completed);
             return mapper.Map<ContractDto>(contract);
         });
     }

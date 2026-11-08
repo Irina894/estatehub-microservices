@@ -4,8 +4,11 @@ using Deals.Bll.Mapping;
 using Deals.Bll.Services;
 using Deals.Dal;
 using Deals.Domain.Interfaces;
+using Platform.ServiceDefaults;
 
 var builder = WebApplication.CreateBuilder(args);
+
+builder.AddServiceDefaults();   // Serilog, OpenTelemetry, health checks, service discovery (Лаб. 5)
 
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
@@ -34,9 +37,12 @@ builder.Services.AddScoped<IRealtorService>(sp =>
 
 var app = builder.Build();
 
+app.UseMiddleware<CorrelationIdMiddleware>();   // CorrelationId у всіх логах запиту
+
 app.UseExceptionHandler();
 app.UseSwagger();
 app.UseSwaggerUI();
 app.MapControllers();
+app.MapDefaultEndpoints();                       // /health і /alive
 
 app.Run();

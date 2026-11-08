@@ -245,3 +245,223 @@ MongoDB недоступна	503
 ![Валідація 400](docs/lab04/04-validation-400.png)
 ![Лог валідації](docs/lab04/05-validation-log.png)
 ![Конфлікт 409](docs/lab04/06-conflict-409.png)
+
+
+
+
+
+
+---
+
+# Лаб. 05 — Оркестрація та спостережуваність мікросервісів (.NET Aspire, YARP, OpenTelemetry, Serilog)
+
+**Мета.** Зібрати три мікросервіси з Лаб. 2–4 (Deals, Catalog, Reviews) в одну платформу, яка стартує **однією командою**, має **єдину точку входу** (API Gateway), **агрегований ендпоїнт** (Aggregator) і **наскрізну спостережуваність**: структуровані логи, розподілені трейси та кореляцію запитів.
+
+## Зміст
+1. [Архітектура](#1-архітектура)
+2. [Як проходить запит](#2-як-проходить-запит)
+3. [Запуск](#3-запуск)
+4. [Приклади запитів](#4-приклади-запитів)
+5. [Спостережуваність: що і як реалізовано](#5-спостережуваність-що-і-як-реалізовано)
+6. [Aggregator і часткові відповіді](#6-aggregator-і-часткові-відповіді)
+7. [Що змінено в сервісах Лаб. 2–4](#7-що-змінено-в-сервісах-лаб-24)
+8. [Структура рішення](#8-структура-рішення)
+9. [Перевірка в Dashboard і скріншоти](#9-перевірка-в-dashboard-і-скріншоти)
+10. [Відомі обмеження](#10-відомі-обмеження)
+11. [Типові проблеми](#11-типові-проблеми)
+
+---
+
+## 1. Архітектура
+
+```mermaid
+flowchart LR
+    C[Клієнт / curl] -->|:5000| GW[gateway<br/>YARP]
+    GW -->|/api/aggregator| AGG[aggregator]
+    GW -->|/api/applications, /api/realtors| DEALS[deals-api]
+    GW -->|/api/properties, /api/categories, /api/amenities| CAT[catalog-api]
+    GW -->|/api/reviews| REV[reviews-api]
+    AGG --> DEALS
+    AGG --> CAT
+    AGG --> REV
+    DEALS --> SQL[(SQL Server<br/>EstateHub_Transactions)]
+    CAT --> SQL2[(SQL Server<br/>EstateHub_Catalog)]
+    REV --> MONGO[(MongoDB<br/>ReviewsDb)]
+```
+
+| Компонент | Проєкт | Призначення |
+|---|---|---|
+| **AppHost** | `Platform.AppHost` | Оркестрація: контейнери SQL Server і MongoDB (`WithDataVolume`), усі сервіси, порядок старту через `WaitFor`, пароль SQL як secret-параметр |
+| **ServiceDefaults** | `Platform.ServiceDefaults` | Спільна конфігурація: Serilog, OpenTelemetry, health checks, service discovery, resilience, CorrelationId |
+| **API Gateway** | `Platform.ApiGateway` | Єдина точка входу (порт **5000**), маршрути YARP за логічними іменами сервісів |
+| **Aggregator** | `Platform.Aggregator` | Aggregator Pattern: збирає картку заявки з трьох сервісів паралельно |
+| **Deals / Catalog / Reviews** | `Services/*` | Мікросервіси з Лаб. 2, 3, 4 з мінімальними змінами |
+
+Логічні імена для service discovery: `deals-api`, `catalog-api`, `reviews-api`, `aggregator`, `gateway`.
+Назви баз збігаються з іменами рядків підключення, які сервіси використовували і раніше: `DealsDb`, `CatalogDb`, `ReviewsDb`. Тому AppHost просто передає їх через `WithReference`.
+
+## 2. Як проходить запит
+
+1. Клієнт звертається до **gateway** (`http://localhost:5000`).
+2. Gateway (middleware `CorrelationIdMiddleware`) бере `X-Correlation-Id` із запиту або генерує новий, кладе його в `LogContext` і в заголовок відповіді.
+3. YARP обирає маршрут за шляхом і передає запит на **логічне ім'я** (`http://deals-api`, `http://catalog-api` тощо). Реальну адресу визначає service discovery, у конфігурації жодних портів сервісів немає.
+4. При виклику один сервіс → інший (Aggregator → сервіси) `CorrelationIdHandler` (DelegatingHandler) додає той самий `X-Correlation-Id` до вихідного HTTP-запиту.
+5. Усі сервіси пишуть логи з одним `CorrelationId`, а OpenTelemetry зв'язує виклики в один trace (`traceparent`).
+
+## 3. Запуск
+
+**Потрібно:** .NET 10 SDK, запущений Docker Desktop.
+
+```bash
+# 1. Пароль SQL Server зберігається як секрет AppHost (не в репозиторії).
+#    Вимоги SQL Server: ≥ 8 символів, великі й малі літери, цифри.
+dotnet user-secrets set "Parameters:sql-password" "<ваш пароль>" --project Platform.AppHost
+
+# 2. Запуск усієї платформи однією командою
+dotnet run --project Platform.AppHost
+```
+
+Консоль виведе адресу **Aspire Dashboard**. Усі ресурси (`sql`, `mongo`, `deals-api`, `catalog-api`, `reviews-api`, `aggregator`, `gateway`) мають перейти у стан **Running**.
+
+**Порядок старту (`WaitFor`):** бази → сервіси → aggregator → gateway. Сервіс не стартує, доки не готова його база.
+
+**Схема БД Deals (один раз після першого запуску).** Deals працює через Dapper/ADO.NET без міграцій, тому схему, процедури й тестові дані з `db/p1` треба розгорнути в контейнер SQL Server. Скрипт сам знаходить контейнер і виконує `sqlcmd` усередині нього:
+
+```bash
+SQL_PASSWORD='<ваш пароль>' bash scripts/deploy-deals-db.sh
+```
+
+Після цього перезапустіть `deals-api` у Dashboard. Catalog застосовує EF-міграції та сідінг сам, Reviews сідить MongoDB сам.
+
+> Дані зберігаються у docker volume (`WithDataVolume`), тому повторний запуск не вимагає повторного розгортання схеми.
+
+## 4. Приклади запитів
+
+Усі запити йдуть через Gateway:
+
+```bash
+curl -i "http://localhost:5000/api/properties?page=1"          # Catalog
+curl -i "http://localhost:5000/api/reviews?productId=4"        # Reviews
+curl -i  http://localhost:5000/api/applications                # Deals
+```
+
+**Створення заявки.** Кирилицю в `curl` з Git Bash на Windows надійніше передавати як `\u`-послідовності (це валідний JSON):
+
+```bash
+curl -i -X POST http://localhost:5000/api/applications \
+  -H "Content-Type: application/json" \
+  -d '{
+    "clientId": "11111111-1111-1111-1111-111111111111",
+    "propertyId": "<id об'\''єкта з /api/properties>",
+    "priceSnapshot": 54000,
+    "propertyTitleSnapshot": "Студія на Подолі"
+  }'
+```
+
+**Агрегована картка заявки:**
+
+```bash
+curl -i "http://localhost:5000/api/aggregator/applications/<id заявки>/full"
+```
+
+У кожній відповіді є заголовок `X-Correlation-Id`.
+
+## 5. Спостережуваність: що і як реалізовано
+
+Усе спільне винесено в **`Platform.ServiceDefaults/Extensions.cs`**. Сервіс підключає це одним викликом `builder.AddServiceDefaults()`.
+
+| Напрям | Реалізація |
+|---|---|
+| **Логи (Serilog)** | Структурований JSON у консоль (`CompactJsonFormatter`); `writeToProviders: true`, тож логи потрапляють і в Aspire Dashboard; рівні: `Debug` у Development, `Information` у Production; перевизначення для шумних категорій (`Microsoft`, `AspNetCore`, `EFCore`, `HttpClient`); збагачувачі `ServiceName`, `EnvironmentName`, `MachineName`, `ThreadId`; властивість `CorrelationId` через `LogContext` |
+| **Трейси (OpenTelemetry)** | Інструментація ASP.NET Core, HttpClient, SqlClient, Runtime та MongoDB (`DiagnosticsActivityEventSubscriber`); власні джерела `EstateHub.*`; фільтр, що виключає `/health` і `/alive`; експорт через OTLP до Dashboard |
+| **Семплінг** | У Development: `AlwaysOn`; інакше: `ParentBased` з часткою з `OpenTelemetry:SamplingRatio` (за замовчуванням 0.1) |
+| **Кореляція** | `CorrelationIdMiddleware` (вхідні запити) + `CorrelationIdHandler` (вихідні HTTP-виклики); заголовок `X-Correlation-Id` |
+| **Health checks** | `/health` (готовність) і `/alive` (живість), доступні в Development |
+| **Resilience** | Стандартний resilience handler (retry, circuit breaker, timeout) для всіх `HttpClient` |
+| **Service discovery** | Логічні імена `http://deals-api` та `https+http://catalog-api` замість адрес і портів |
+
+**CorrelationId і TraceId.** Це різні речі. `TraceId` генерує OpenTelemetry для одного розподіленого трейсу. `CorrelationId` приходить від клієнта (або створюється на gateway) і дозволяє знайти в логах усі записи одного запиту, навіть якщо трейс семплінгом не збережено.
+
+## 6. Aggregator і часткові відповіді
+
+`GET /api/aggregator/applications/{id}/full` збирає **картку заявки**:
+
+1. Спочатку запитує **Deals** (з нього беремо `propertyId` і назву об'єкта; без заявки відповідь `404`).
+2. Далі **паралельно** (`Task.WhenAll`) запитує **Catalog** (об'єкт) та **Reviews** (відгуки).
+3. Рахує `averageRating` і повертає один композитний DTO.
+
+```json
+{
+  "application": { "id": "...", "propertyId": "...", "status": "new" },
+  "property":    { "title": "Студія на Подолі", "price": 54000, "city": "Київ" },
+  "reviews":     [ { "rating": 4, "authorName": "Юрій М." }, { "rating": 5, "authorName": "Наталія Г." } ],
+  "averageRating": 4.5,
+  "warnings": []
+}
+```
+
+**Часткові відмови.** Кожен виклик Catalog і Reviews обгорнуто в `SafeAsync`: на запит діє тайм-аут (`ServiceTimeoutSeconds`, за замовчуванням 3 с), а при помилці чи тайм-ауті відповідь **лишається `200`**. Недоступна частина порожня, а в `warnings` з'являється пояснення, наприклад `"reviews-api is unavailable"`. Скасування запиту клієнтом (`CancellationToken`) на такі попередження не перетворюється.
+
+> Тайм-аут нашого агрегатора навмисно коротший за повні retry стандартного resilience handler, інакше недоступність сервісу виявлялася б надто довго.
+
+**Демо:** зупиніть `reviews-api` у Dashboard і повторіть запит. Відповідь `200`, дані заявки та об'єкта є, `reviews` порожні, у `warnings` повідомлення (приблизно через 3 с). Запустіть сервіс знову, і відповідь знову повна.
+
+## 7. Що змінено в сервісах Лаб. 2–4
+
+Бізнес-логіка не змінювалася. Зміни мінімальні:
+
+| Сервіс | Зміни |
+|---|---|
+| Усі три | `builder.AddServiceDefaults()`, `app.UseMiddleware<CorrelationIdMiddleware>()`, `app.MapDefaultEndpoints()` у `Program.cs`; посилання на `Platform.ServiceDefaults` |
+| Catalog | Прибрано власні налаштування Serilog і власний `CorrelationIdMiddleware` (замінені ServiceDefaults) |
+| Reviews | Рядок підключення `ConnectionStrings:ReviewsDb` від Aspire має пріоритет над `MongoDb:ConnectionString`; драйвер MongoDB підписано на трасування |
+| Deals, Catalog, Reviews | Структуровані логи бізнес-подій (`ApplicationId`, `PropertyId`, `Status` тощо) і власні spans (`ActivitySource` `EstateHub.*`) |
+
+## 8. Структура рішення
+
+```text
+Platform.slnx
+Platform.AppHost/            # оркестрація (AppHost.cs)
+Platform.ServiceDefaults/    # Extensions.cs, CorrelationId.cs
+Platform.ApiGateway/         # YARP, appsettings.json з маршрутами
+Platform.Aggregator/         # Clients, Models, Services, Controllers
+Services/
+  Deals/    (Deals.Api, Deals.Bll, Deals.Dal, Deals.Domain)
+  Catalog/  (Catalog.Api, Catalog.Bll, Catalog.Dal, Catalog.Domain)
+  Reviews/  (Reviews.Domain, .Application, .Infrastructure, .WebApi)
+scripts/deploy-deals-db.sh   # розгортання схеми Deals у контейнер
+db/p1/                       # schema.sql, procedures.sql, seed.sql (Deals)
+docs/lab05/                  # скріншоти
+```
+
+## 9. Перевірка в Dashboard і скріншоти
+
+1. **Resources:** усі ресурси у стані Running.
+2. **Traces:** trace запиту до `/api/aggregator/...` показує ієрархію `gateway → aggregator → deals-api / catalog-api / reviews-api → SQL / MongoDB`; виклики catalog і reviews перекриваються в часі, тобто виконуються паралельно.
+3. **Structured logs:** фільтр за `CorrelationId` (значення з заголовка відповіді) показує записи всіх сервісів ланцюжка з полями `ServiceName`, `EnvironmentName`, `MachineName`, `TraceId`, `SpanId`.
+4. **Часткова відповідь:** відповідь з `warnings` при зупиненому `reviews-api`.
+
+![Dashboard: усі ресурси Running](docs/lab05/dashboard.png)
+
+![Trace агрегатора](docs/lab05/trace.png)
+
+![Логи, відфільтровані за CorrelationId](docs/lab05/logs.png)
+
+![Часткова відповідь (reviews-api зупинено)](docs/lab05/warnings.png)
+
+## 10. Відомі обмеження
+
+- **Зв'язок Reviews ↔ Catalog.** У Reviews (Лаб. 4) об'єкт ідентифікується числом `productId`, а в Catalog/Deals це `Guid`. Тому Aggregator зіставляє назву об'єкта з `productId` через `Aggregator:ReviewProductMap` у `Platform.Aggregator/appsettings.json`. Це тимчасове рішення, а в майбутньому `productId` варто замінити на `Guid` об'єкта.
+- **Seed-заявка Deals** посилається на неіснуючий `PropertyId`, тому для повної картки створіть заявку з реальним `propertyId` і `propertyTitleSnapshot`, що збігається з назвою об'єкта з Catalog.
+- Схему Deals треба розгорнути вручну один раз (див. розділ 3), бо Deals не використовує міграції.
+
+## 11. Типові проблеми
+
+| Симптом | Причина і рішення |
+|---|---|
+| `docker: command not found` у Git Bash | `export PATH="$PATH:/c/Program Files/Docker/Docker/resources/bin"` |
+| Dashboard: «Container runtime not installed / unhealthy» | Запустіть Docker Desktop і дочекайтеся стану Running |
+| `sqlcmd` з хоста: «TCP Provider: wait operation timed out» | Порт контейнера призначає Aspire. Використовуйте `scripts/deploy-deals-db.sh` (виконується всередині контейнера) |
+| `/api/applications` повертає 500 | Не розгорнуто схему Deals. Запустіть скрипт і перезапустіть `deals-api` |
+| `400` на POST із кирилицею у Git Bash | Передавайте кирилицю як `\uXXXX` (розділ 4) |
+| `dotnet build` падає з `MSB3027` (файл зайнятий) | AppHost ще працює. Зупиніть його (Ctrl+C) перед збіркою |
