@@ -1,6 +1,7 @@
 using FluentValidation;
 using MediatR;
 using MongoDB.Bson;
+using Reviews.Application.Caching;
 using Reviews.Application.Common.Messaging;
 using Reviews.Domain.Entities;
 using Reviews.Domain.Exceptions;
@@ -8,7 +9,12 @@ using Reviews.Domain.Interfaces;
 
 namespace Reviews.Application.Commands.DeleteReview;
 
-public sealed record DeleteReviewCommand(string Id) : ICommand;
+public sealed record DeleteReviewCommand(string Id) : ICommand, ICacheInvalidating
+{
+    public IEnumerable<string> KeysToRemove => [ReviewsCacheKeys.Review(Id)];
+    public bool InvalidatesLists => true;
+    public string Reason => "ReviewDeleted";
+}
 
 public sealed class DeleteReviewCommandValidator : AbstractValidator<DeleteReviewCommand>
 {

@@ -2,6 +2,7 @@ using AutoMapper;
 using FluentValidation;
 using MediatR;
 using MongoDB.Bson;
+using Reviews.Application.Caching;
 using Reviews.Application.Common.Messaging;
 using Reviews.Application.Common.Models;
 using Reviews.Domain.Entities;
@@ -10,7 +11,12 @@ using Reviews.Domain.Interfaces;
 
 namespace Reviews.Application.Commands.AddComment;
 
-public sealed record AddCommentCommand(string ReviewId, long AuthorId, string Text) : ICommand<ReviewDto>;
+public sealed record AddCommentCommand(string ReviewId, long AuthorId, string Text) : ICommand<ReviewDto>, ICacheInvalidating
+{
+    public IEnumerable<string> KeysToRemove => [ReviewsCacheKeys.Review(ReviewId)];
+    public bool InvalidatesLists => true;   // у списку є лічильник коментарів
+    public string Reason => "CommentAdded";
+}
 
 public sealed class AddCommentCommandValidator : AbstractValidator<AddCommentCommand>
 {

@@ -1,5 +1,6 @@
 using FluentValidation;
 using MediatR;
+using Reviews.Application.Caching;
 using Reviews.Application.Common.Interfaces;
 using Reviews.Application.Common.Messaging;
 using Reviews.Application.Common.Models;
@@ -8,7 +9,13 @@ namespace Reviews.Application.Queries.GetReviewsList;
 
 public sealed record GetReviewsListQuery(
     long? ProductId, int? MinRating, string? Search, int Page = 1, int PageSize = 20)
-    : IQuery<PagedResult<ReviewListItemDto>>;
+    : IQuery<PagedResult<ReviewListItemDto>>, ICachedQuery
+{
+    public bool UsesListVersion => true;   // будь-яка зміна відгуків міняє версію й інвалідує всі списки
+    public string BuildKey(string listVersion) =>
+        ReviewsCacheKeys.List(listVersion, ProductId, MinRating, Search, Page, PageSize);
+    public CacheTtl Ttl => new(TimeSpan.FromSeconds(30), TimeSpan.FromMinutes(2));
+}
 
 public sealed class GetReviewsListQueryValidator : AbstractValidator<GetReviewsListQuery>
 {

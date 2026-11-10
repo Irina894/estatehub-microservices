@@ -1,3 +1,4 @@
+using Reviews.Application.Caching;
 using Reviews.Application.Common.Messaging;
 using Reviews.Application.Common.Models;
 
@@ -9,4 +10,9 @@ public sealed record UpdateReviewCommand(
     int Rating,
     string Text,
     CriteriaDto? Criteria,
-    int? ExpectedVersion) : ICommand<ReviewDto>;
+    int? ExpectedVersion) : ICommand<ReviewDto>, ICacheInvalidating
+{
+    public IEnumerable<string> KeysToRemove => [ReviewsCacheKeys.Review(Id)];
+    public bool InvalidatesLists => true;   // у списках видно рейтинг і текст
+    public string Reason => "ReviewUpdated";
+}

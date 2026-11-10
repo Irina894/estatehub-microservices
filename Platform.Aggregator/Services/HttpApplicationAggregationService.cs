@@ -6,23 +6,25 @@ using Platform.Aggregator.Models;
 namespace Platform.Aggregator.Services;
 
 /// <summary>
-/// Aggregator Pattern: збирає картку заявки з трьох сервісів. Заявка обов'язкова (без неї агрегувати нічого),
+/// HTTP-версія Aggregator (Лаб. 5), збережена для порівняння з gRPC (?transport=http). Збирає картку заявки з трьох сервісів. Заявка обов'язкова (без неї агрегувати нічого),
 /// а об'єкт і відгуки запитуються ПАРАЛЕЛЬНО (Task.WhenAll); якщо один недоступний - відповідь часткова.
 /// </summary>
-public class ApplicationAggregationService(
+public class HttpApplicationAggregationService(
     DealsClient deals,
     CatalogClient catalog,
     ReviewsClient reviews,
     IOptions<AggregatorOptions> options,
-    ILogger<ApplicationAggregationService> logger)
+    ILogger<HttpApplicationAggregationService> logger)
+    : IApplicationAggregator
 {
-    public static readonly ActivitySource Source = new("EstateHub.Aggregator");
+    private static readonly ActivitySource Source = new("EstateHub.Aggregator");
 
     private readonly AggregatorOptions _options = options.Value;
 
     public async Task<FullApplicationDto?> GetFullApplicationAsync(Guid applicationId, CancellationToken ct)
     {
-        using var activity = Source.StartActivity("AggregateApplication");
+        using var activity = Source.StartActivity("AggregateApplication.Http");
+        activity?.SetTag("aggregator.transport", "http");
         activity?.SetTag("application.id", applicationId);
 
         var warnings = new List<string>();
