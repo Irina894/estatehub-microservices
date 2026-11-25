@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+option csharp_namespace = "Catalog.Grpc";
+
+package catalog;
+
+// Читання даних каталогу для внутрішніх сервісів (Aggregator). Запис лишається в REST API.
+service CatalogService {
+  // Картка об'єкта. Повертає NotFound, якщо об'єкта немає, і InvalidArgument для некоректного Guid.
+  rpc GetProperty (GetPropertyRequest) returns (PropertyReply);
+
+  // Кілька об'єктів за один виклик. Відсутні ідентифікатори пропускаються.
+  rpc GetPropertiesByIds (GetPropertiesByIdsRequest) returns (PropertiesReply);
+
+  // Довідник категорій.
+  rpc ListCategories (ListCategoriesRequest) returns (CategoriesReply);
+}
+
+// Guid передається рядком: у proto3 немає вбудованого типу для нього.
+message GetPropertyRequest {
+  string id = 1;
+}
+
+message GetPropertiesByIdsRequest {
+  repeated string ids = 1;
+}
+
+message PropertyReply {
+  string id = 1;
+  string title = 2;
+  string description = 3;
+  double price = 4;              // для грошей у production краще окремий message з units/nanos
+  string city = 5;
+  string status = 6;
+  string category_name = 7;
+  PropertyLocation location = 8; // не заповнене, якщо адреси немає
+}
+
+message PropertyLocation {
+  string full_address = 1;
+  optional double latitude = 2;  // optional: відрізняємо "0" від "не задано"
+  optional double longitude = 3;
+}
+
+message PropertiesReply {
+  repeated PropertyReply properties = 1;
+}
+
+message ListCategoriesRequest {}
+
+message CategoryReply {
+  string id = 1;
+  string name = 2;
+}
+
+message CategoriesReply {
+  repeated CategoryReply categories = 1;
+}

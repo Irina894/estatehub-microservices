@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+import "google/protobuf/timestamp.proto";
+
+option csharp_namespace = "Deals.Grpc";
+
+package deals;
+
+// Читання заявок для внутрішніх сервісів (Aggregator). Запис лишається в REST API.
+service DealsService {
+  // Заявка за id. NotFound, якщо її немає; InvalidArgument для некоректного Guid.
+  rpc GetApplication (GetApplicationRequest) returns (ApplicationReply);
+}
+
+message GetApplicationRequest {
+  string id = 1;                  // Guid у текстовому вигляді
+}
+
+message ApplicationReply {
+  string id = 1;
+  string client_id = 2;
+  string property_id = 3;
+  double price_snapshot = 4;      // для грошей у production краще окремий message з units/nanos
+  string property_title_snapshot = 5;
+  string status = 6;
+  google.protobuf.Timestamp created_at = 7;
+}
