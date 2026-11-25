@@ -1,3 +1,4 @@
+using Deals.Api.Metrics;
 using Deals.Bll.DTOs;
 using Deals.Bll.Services;
 using Microsoft.AspNetCore.Mvc;
@@ -6,7 +7,7 @@ namespace Deals.Api.Controllers;
 
 [ApiController]
 [Route("api/[controller]")]
-public class ApplicationsController(IApplicationService service) : ControllerBase
+public class ApplicationsController(IApplicationService service, DealsMetrics metrics) : ControllerBase
 {
     /// <summary>Список заявок із пагінацією та фільтром за статусом.</summary>
     [HttpGet]
@@ -21,13 +22,18 @@ public class ApplicationsController(IApplicationService service) : ControllerBas
     public async Task<ActionResult<ApplicationDto>> Create(CreateApplicationDto dto)
     {
         var created = await service.CreateAsync(dto);
+        metrics.ApplicationCreated();                      // бізнес-метрика: лише після успішного створення
         return CreatedAtAction(nameof(Get), new { id = created.Id }, created);
     }
 
     /// <summary>Відхилення заявки (перевіряється допустимість переходу та RowVersion).</summary>
     [HttpPatch("{id:guid}/status")]
-    public async Task<ActionResult<ApplicationDto>> ChangeStatus(Guid id, ChangeApplicationStatusDto dto) =>
-        Ok(await service.ChangeStatusAsync(id, dto));
+    public async Task<ActionResult<ApplicationDto>> ChangeStatus(Guid id, ChangeApplicationStatusDto dto)
+    {
+        var updated = await service.ChangeStatusAsync(id, dto);
+        metrics.StatusChanged(dto.Status);
+        return Ok(updated);
+    }
 
     /// <summary>М'яке видалення заявки.</summary>
     [HttpDelete("{id:guid}")]
@@ -39,13 +45,23 @@ public class ApplicationsController(IApplicationService service) : ControllerBas
 
     /// <summary>Транзакція: затвердження заявки + створення огляду.</summary>
     [HttpPost("{id:guid}/approve")]
-    public async Task<ActionResult<ViewingDto>> Approve(Guid id, ApproveApplicationDto dto) =>
-        Ok(await service.ApproveAsync(id, dto));
+    public async Task<ActionResult<ViewingDto>> Approve(Guid id, ApproveApplicationDto dto)
+    {
+        using var _ = metrics.MeasureOperation("approve");   // тривалість + in-flight
+        var viewing = await service.ApproveAsync(id, dto);
+        metrics.StatusChanged("approved");
+        return Ok(viewing);
+    }
 
     /// <summary>Транзакція: підписання договору + завершення заявки.</summary>
     [HttpPost("{id:guid}/contract")]
-    public async Task<ActionResult<ContractDto>> SignContract(Guid id, SignContractDto dto) =>
-        Ok(await service.SignContractAsync(id, dto));
+    public async Task<ActionResult<ContractDto>> SignContract(Guid id, SignContractDto dto)
+    {
+        using var _ = metrics.MeasureOperation("sign_contract");
+        var contract = await service.SignContractAsync(id, dto);
+        metrics.StatusChanged("completed");
+        return Ok(contract);
+    }
 
     [HttpGet("{id:guid}/contract")]
     public async Task<ActionResult<ContractDto>> GetContract(Guid id) => Ok(await service.GetContractAsync(id));

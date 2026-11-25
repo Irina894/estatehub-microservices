@@ -1,5 +1,7 @@
 using Catalog.Api.ExceptionHandling;
 using Catalog.Api.Grpc;
+using Catalog.Api.HealthChecks;
+using Catalog.Api.Metrics;
 using Catalog.Bll;
 using Catalog.Dal;
 using Catalog.Dal.Repositories;
@@ -25,13 +27,19 @@ builder.Services.AddScoped<IUnitOfWork, UnitOfWork>();
 // L1: кеш у пам'яті з обмеженням розміру (кожен запис має Size = 1, тож максимум 10 000 записів)
 builder.Services.AddMemoryCache(o => o.SizeLimit = 10_000);
 // L2: Redis через Aspire (ім'я "redis" = ім'я ресурсу в AppHost; рядок підключення передає Aspire)
-builder.AddRedisDistributedCache("redis");
+// DisableHealthChecks: стандартна перевірка Aspire дала б Unhealthy; ми реєструємо власну (Degraded) нижче
+builder.AddRedisDistributedCache("redis", s => s.DisableHealthChecks = true);
 
 // ---- BLL (сервіси з кеш-декораторами) ----
 builder.Services.AddCatalogBll();
 
 // ---- gRPC (контракт Protos/catalog.proto) + interceptor логування з ServiceDefaults ----
 builder.Services.AddServiceGrpc();
+
+// ---- Метрики та health checks (Лаб. 7) ----
+builder.Services.AddSingleton<CatalogMetrics>();
+builder.Services.AddHealthChecks().AddCatalogHealthChecks();
+builder.Services.AddGrpcHealthChecks();                                  // стандартний gRPC Health Checking Protocol
 
 // ---- API ----
 builder.Services.AddControllers();
@@ -57,6 +65,7 @@ if (app.Environment.IsDevelopment())
 
 app.MapControllers();
 app.MapGrpcService<CatalogGrpcService>();
+app.MapGrpcHealthChecksService();                // grpc.health.v1.Health/Check
 app.MapDefaultEndpoints();
 
 // ---- Міграції та сідінг (вимкнено в Production) ----

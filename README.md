@@ -679,3 +679,95 @@ bash scripts/benchmark-aggregator.sh <id заявки> 30
 - **У Development Aggregator довіряє dev-сертифікату** локальних сервісів (щоб gRPC не залежав від налаштувань системи). У production цього немає.
 - Гроші в `.proto` передано як `double` для простоти; у production краще окреме повідомлення `units`/`nanos`.
 - Кожен сервіс має **власну копію** `TwoLevelCache` (у своєму шарі `Caching/`): мікросервіси не діляться бібліотеками, а їхні кеші незалежні.
+
+
+---
+
+# Лаб. 07 — Резильєнтність, метрики та Health Checks
+
+## 1. Що додано і де це лежить
+
+| Частина | Файли |
+|---|---|
+| Політики стійкості Aggregator (HTTP + gRPC) | `Platform.Aggregator/Resilience/ResiliencePolicies.cs`, `Platform.Aggregator/Program.cs` |
+| Таймаути за критичністю | `Platform.Aggregator/Models/AggregatorOptions.cs` (`CriticalServiceTimeoutSeconds`), `*AggregationService.cs` |
+| Метрика Polly, `/health/live`, `/health/ready` | `Platform.ServiceDefaults/Extensions.cs`, `Platform.ServiceDefaults/HealthChecks.cs` |
+| Бізнес-метрики (IMeterFactory) | `Services/Deals/Deals.Api/Metrics/`, `Services/Catalog/Catalog.Api/Metrics/`, `Services/Reviews/Reviews.WebApi/Metrics/` |
+| Health checks сервісів (SQL, MongoDB, Redis, gRPC) | `*/HealthChecks/` у кожному сервісі, `Platform.Aggregator/HealthChecks/` |
+| gRPC Health Checking Protocol | `Grpc.AspNetCore.HealthChecks` у сервісах, `Platform.Aggregator/Protos/health.proto` |
+| Health у Dashboard | `Platform.AppHost/AppHost.cs` (`WithHttpHealthCheck("/health/ready")`) |
+| Імітація збоїв (лише Development) | `Services/Reviews/Reviews.WebApi/Middleware/FaultInjectionMiddleware.cs` |
+| Redis graceful degradation | `*/Caching/TwoLevelCache.cs` (з Лаб. 6) |
+
+## 2. Політики стійкості: обґрунтування
+
+Критичні сервіси — **Deals** і **Catalog** (без них агрегована відповідь не має сенсу). Некритичний — **Reviews** (відповідь віддається і без нього: partial response + warning).
+
+| Параметр | Критичні (Deals, Catalog) | Некритичний (Reviews) | Чому |
+|---|---|---|---|
+| Retry, кількість повторів | 3 | 1 | Критичні варто «дотискати»; для Reviews швидка відмова краща за очікування |
+| Retry, пауза / backoff | 500 мс, Exponential + jitter | 200 мс, Exponential + jitter | Jitter не дає всім клієнтам повторювати одночасно |
+| Небезпечні методи (POST/PUT/PATCH/DELETE) | не повторюються (`DisableForUnsafeHttpMethods`) | так само | Повтор неідемпотентного запиту може задублювати запис |
+| Timeout однієї спроби | 4 с | 2 с | Повільний Reviews не має гальмувати всю відповідь |
+| Total timeout (HTTP) | 15 с | 5 с | ≈ спроби × таймаут + паузи |
+| gRPC deadline (охоплює всі повтори) | 12 с (`CriticalServiceTimeoutSeconds`) | 3 с (`ServiceTimeoutSeconds`) | Deadline = верхня межа часу виклику |
+| Circuit breaker: FailureRatio | 0.5 | 0.3 | Reviews «відключаємо» легше |
+| MinimumThroughput | 10 | 5 | Щоб кілька випадкових збоїв не відкривали breaker |
+| SamplingDuration | 30 с | 10 с | ≥ 2 × AttemptTimeout (вимога валідації Polly) |
+| BreakDuration | 15 с | 30 с | Критичний перевіряємо частіше; Reviews даємо довше «відпочити» |
+
+**Без дублювання шарів.** У `ServiceDefaults` через `ConfigureHttpClientDefaults` усім клієнтам додається стандартний handler. Для клієнтів Aggregator ми спершу викликаємо `RemoveAllResilienceHandlers()`, і лише потім `AddStandardResilienceHandler(...)` зі своїми параметрами — тож політики не накладаються (немає retry × retry).
+
+**gRPC.** Повтори — нативні gRPC (`ServiceConfig` → `MethodConfig` → `RetryPolicy`, лише для статусу `Unavailable`, експоненційний backoff; gRPC додає jitter сам). Для gRPC стандартний handler видалено: HTTP-рівень бачить `200 OK`, а помилка лежить у trailer `grpc-status`, тож Polly-retry по HTTP-кодах тут майже не працює і лише дублював би повтори. На HTTP-рівні лишено лише circuit breaker (обриви з'єднання).
+
+**Redis.** `TwoLevelCache` (Лаб. 6) ловить виняток Redis, пише попередження й працює далі лише з L1 → користувач бачить повільнішу відповідь, але не помилку.
+
+## 3. Бізнес-метрики
+
+Усі метрики створено через `IMeterFactory`, класи — Singleton, `Meter` підключено через `AddMeter` у ServiceDefaults. Теги мають низьку кардинальність (значення з фіксованого набору).
+
+| Сервіс | Метрика | Тип | Теги |
+|---|---|---|---|
+| Deals | `deals.applications.created` | Counter | — |
+| Deals | `deals.applications.status_changes` | Counter | `to_status` (білий список) |
+| Deals | `deals.operation.duration` | Histogram (мс) | `operation` = approve / sign_contract |
+| Deals | `deals.operations.in_flight` | ObservableGauge | — |
+| Catalog | `catalog.properties.created`, `.price_changes`, `.status_changes` | Counter | `to_status` |
+| Catalog | `catalog.search.duration`, `catalog.search.total_count` | Histogram | `endpoint` = list / featured / by_amenity |
+| Catalog | `catalog.searches.in_flight` | ObservableGauge | — |
+| Reviews | `reviews.created`, `reviews.deleted`, `reviews.comments.added` | Counter | `rating` 1..5 |
+| Reviews | `reviews.write.duration` | Histogram (мс) | `operation` |
+| Reviews | `reviews.writes.in_flight` | ObservableGauge | — |
+
+Свідомо **не** використовуємо як теги Id заявок, користувачів, текст — це вибух кардинальності.
+
+## 4. Health checks
+
+| Ендпоінт | Що перевіряє | Коди |
+|---|---|---|
+| `/health/live` | тільки те, що процес відповідає (тег `live`) | 200 |
+| `/health/ready` | залежності (тег `ready`): SQL / MongoDB, Redis, у Aggregator — gRPC-сервіси | Healthy 200, **Degraded 200**, Unhealthy 503 |
+
+| Сервіс | Залежність | При збої |
+|---|---|---|
+| Deals, Catalog | SQL Server | Unhealthy |
+| Reviews | MongoDB | Unhealthy |
+| усі | Redis | **Degraded** (сервіс працює без L2) |
+| Aggregator | Deals, Catalog (gRPC Health) | Unhealthy |
+| Aggregator | Reviews (gRPC Health) | Degraded |
+
+Відповідь — JSON з деталями кожної перевірки (статус, опис, тривалість, помилка). Сервіси також віддають стандартний gRPC Health Checking Protocol (`MapGrpcHealthChecksService`); Aggregator викликає `Health/Check` з дедлайном 2 с.
+
+## 5. Як продемонструвати
+
+1. Запустити AppHost; у Dashboard → **Resources** колонка Health (усі Healthy).
+2. **Retry / breaker:** у `AppHost.cs` додати Reviews `.WithEnvironment("FaultInjection__FailureRate", "0.7")`, перезапустити; зробити ~20 запитів `GET /api/aggregator/applications/{id}/full` через gateway → у **Structured logs** шукати `OnRetry` та `OnCircuitOpened` (джерело `aggregator`); відповідь містить `warnings`.
+3. **Метрики:** створити заявку/відгук → Dashboard → Metrics → обрати сервіс і метрику (напр. `deals.applications.created`).
+4. **Degraded:** зупинити ресурс `redis` → `GET /health/ready` будь-якого сервісу: `status: Degraded`, HTTP 200; у Resources сервіс лишається працювати.
+5. **Unhealthy:** зупинити `sql` → `/health/ready` Deals/Catalog повертає 503.
+
+## 6. Обмеження
+
+- Код написаний без можливості скомпілювати в середовищі розробки асистента; перед здачею зробіть `dotnet build`.
+- Перевірки SQL/Mongo/Redis реалізовані власними `IHealthCheck` (без пакетів AspNetCore.HealthChecks.*), щоб не залежати від версій сторонніх пакетів.
+- Fault injection працює лише в Development і за замовчуванням нічого не ламає.

@@ -1,4 +1,6 @@
 using Deals.Api.Grpc;
+using Deals.Api.HealthChecks;
+using Deals.Api.Metrics;
 using Deals.Api.Middleware;
 using Deals.Bll.Caching;
 using Deals.Bll.Mapping;
@@ -33,7 +35,8 @@ builder.Services.AddScoped<IUnitOfWork>(_ => new UnitOfWork(connectionString));
 // L1: кеш у пам'яті з обмеженням розміру (кожен запис має Size = 1, тож максимум 10 000 записів)
 builder.Services.AddMemoryCache(o => o.SizeLimit = 10_000);
 // L2: Redis через Aspire (ім'я "redis" = ім'я ресурсу в AppHost)
-builder.AddRedisDistributedCache("redis");
+// DisableHealthChecks: стандартна перевірка Aspire дала б Unhealthy; ми реєструємо власну (Degraded) нижче
+builder.AddRedisDistributedCache("redis", s => s.DisableHealthChecks = true);
 builder.Services.AddSingleton<CacheMetrics>();
 builder.Services.AddSingleton<ITwoLevelCache, TwoLevelCache>();
 
@@ -48,6 +51,11 @@ builder.Services.AddScoped<IRealtorService>(sp =>
 // ---- gRPC (контракт Protos/deals.proto) + interceptor логування з ServiceDefaults ----
 builder.Services.AddServiceGrpc();
 
+// ---- Метрики та health checks (Лаб. 7) ----
+builder.Services.AddSingleton<DealsMetrics>();
+builder.Services.AddHealthChecks().AddDealsHealthChecks();
+builder.Services.AddGrpcHealthChecks();                                  // стандартний gRPC Health Checking Protocol
+
 var app = builder.Build();
 
 app.UseMiddleware<CorrelationIdMiddleware>();   // CorrelationId у всіх логах запиту
@@ -57,6 +65,7 @@ app.UseSwagger();
 app.UseSwaggerUI();
 app.MapControllers();
 app.MapGrpcService<DealsGrpcService>();
-app.MapDefaultEndpoints();                       // /health і /alive
+app.MapGrpcHealthChecksService();                // grpc.health.v1.Health/Check
+app.MapDefaultEndpoints();                       // /health/live, /health/ready
 
 app.Run();

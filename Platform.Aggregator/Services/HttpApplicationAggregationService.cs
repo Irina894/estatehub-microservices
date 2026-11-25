@@ -38,7 +38,7 @@ public class HttpApplicationAggregationService(
         // незалежні виклики стартують одночасно
         var propertyTask = SafeAsync(
             () => catalog.GetPropertyAsync(application.PropertyId, ct),
-            "catalog-api", $"property {application.PropertyId}", warnings, ct);
+            "catalog-api", $"property {application.PropertyId}", warnings, ct, critical: true);
 
         var reviewsTask = productId is null
             ? Task.FromResult<IReadOnlyList<ReviewDto>?>(null)
@@ -78,13 +78,15 @@ public class HttpApplicationAggregationService(
     /// Скасування клієнтом (ct) НЕ ковтається - воно припиняє весь запит.
     /// </summary>
     private async Task<T?> SafeAsync<T>(
-        Func<Task<T?>> call, string service, string what, List<string> warnings, CancellationToken ct)
+        Func<Task<T?>> call, string service, string what, List<string> warnings, CancellationToken ct,
+        bool critical = false)
     {
         var sw = Stopwatch.StartNew();
         logger.LogInformation("Calling {Service} for {What}", service, what);
         try
         {
-            var result = await call().WaitAsync(TimeSpan.FromSeconds(_options.ServiceTimeoutSeconds), ct);
+            var result = await call().WaitAsync(TimeSpan.FromSeconds(
+                critical ? _options.CriticalServiceTimeoutSeconds : _options.ServiceTimeoutSeconds), ct);
             logger.LogInformation("{Service} responded in {Elapsed} ms", service, sw.ElapsedMilliseconds);
             return result;
         }

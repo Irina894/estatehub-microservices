@@ -12,6 +12,12 @@ public class AggregatorOptions
 
     /// <summary>Скільки чекаємо відповіді одного сервісу, перш ніж вважати його недоступним.</summary>
     public int ServiceTimeoutSeconds { get; set; } = 3;
+
+    /// <summary>
+    /// Лаб. 7: бюджет часу для КРИТИЧНИХ сервісів (Deals, Catalog). Має покривати retry:
+    /// ~ MaxAttempts × таймаут спроби + паузи. Для некритичного Reviews лишається ServiceTimeoutSeconds.
+    /// </summary>
+    public int CriticalServiceTimeoutSeconds { get; set; } = 12;
 }
 
 public class ReviewProductMapping

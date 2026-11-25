@@ -22,6 +22,11 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Лаб. 7: стандартний gRPC Health Checking Protocol (лише клієнт) -->
+    <Protobuf Include="Protos/health.proto" GrpcServices="Client" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Protobuf Include="../Services/Catalog/Catalog.Api/Protos/catalog.proto" GrpcServices="Client" />
   </ItemGroup>
 

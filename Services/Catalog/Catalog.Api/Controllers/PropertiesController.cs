@@ -1,3 +1,4 @@
+using Catalog.Api.Metrics;
 using Catalog.Bll.Dtos;
 using Catalog.Bll.Services;
 using FluentValidation;
@@ -12,7 +13,8 @@ public class PropertiesController(
     IValidator<CreatePropertyDto> createValidator,
     IValidator<UpdatePropertyDto> updateValidator,
     IValidator<ChangePriceDto> priceValidator,
-    IValidator<ChangeStatusDto> statusValidator) : ApiControllerBase
+    IValidator<ChangeStatusDto> statusValidator,
+    CatalogMetrics metrics) : ApiControllerBase
 {
     /// <summary>Список із фільтрами, сортуванням і пагінацією (усе в SQL).</summary>
     [HttpGet]
@@ -22,7 +24,9 @@ public class PropertiesController(
     {
         if (await ValidateAsync(queryValidator, query, ct) is { } bad) return bad;
 
+        using var _ = metrics.MeasureSearch("list");
         var result = await service.GetPagedAsync(query, ct);
+        metrics.SearchFound(result.TotalCount);
         Response.Headers["X-Total-Count"] = result.TotalCount.ToString();
         Response.Headers["X-Total-Pages"] = result.TotalPages.ToString();
         return Ok(result);
@@ -41,6 +45,7 @@ public class PropertiesController(
     {
         if (string.IsNullOrWhiteSpace(city))
             return ValidationProblem(new ValidationProblemDetails(new Dictionary<string, string[]> { ["city"] = new[] { "Вкажіть місто." } }));
+        using var _ = metrics.MeasureSearch("featured");
         return Ok(await service.GetFeaturedAsync(city.Trim(), limit, ct));
     }
 
@@ -50,6 +55,7 @@ public class PropertiesController(
     {
         if (string.IsNullOrWhiteSpace(amenity))
             return ValidationProblem(new ValidationProblemDetails(new Dictionary<string, string[]> { ["amenity"] = new[] { "Вкажіть назву зручності." } }));
+        using var _ = metrics.MeasureSearch("by_amenity");
         return Ok(await service.GetByAmenitySinceAsync(amenity.Trim(), since ?? DateTime.UtcNow.AddYears(-10), ct));
     }
 
@@ -63,6 +69,7 @@ public class PropertiesController(
         if (await ValidateAsync(createValidator, dto, ct) is { } bad) return bad;
 
         var created = await service.CreateAsync(dto, ct);
+        metrics.PropertyCreated();
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);   // 201 + Location
     }
 
@@ -81,6 +88,7 @@ public class PropertiesController(
     {
         if (await ValidateAsync(priceValidator, dto, ct) is { } bad) return bad;
         await service.ChangePriceAsync(id, dto, ct);
+        metrics.PriceChanged();
         return NoContent();
     }
 
@@ -91,6 +99,7 @@ public class PropertiesController(
     {
         if (await ValidateAsync(statusValidator, dto, ct) is { } bad) return bad;
         await service.ChangeStatusAsync(id, dto, ct);
+        metrics.StatusChanged(dto.Status);
         return NoContent();
     }
 

@@ -38,7 +38,7 @@ public class GrpcApplicationAggregationService(
         try
         {
             reply = await deals.GetApplicationAsync(
-                new GetApplicationRequest { Id = applicationId.ToString() }, deadline: Deadline(), cancellationToken: ct);
+                new GetApplicationRequest { Id = applicationId.ToString() }, deadline: Deadline(critical: true), cancellationToken: ct);
         }
         catch (RpcException ex) when (ex.StatusCode == StatusCode.NotFound)
         {
@@ -59,7 +59,7 @@ public class GrpcApplicationAggregationService(
                 try
                 {
                     var r = await catalog.GetPropertyAsync(
-                        new GetPropertyRequest { Id = application.PropertyId.ToString() }, deadline: Deadline(), cancellationToken: ct);
+                        new GetPropertyRequest { Id = application.PropertyId.ToString() }, deadline: Deadline(critical: true), cancellationToken: ct);
                     return ToProperty(r);
                 }
                 catch (RpcException ex) when (ex.StatusCode == StatusCode.NotFound)
@@ -96,8 +96,12 @@ public class GrpcApplicationAggregationService(
         return new FullApplicationDto(application, property, reviewItems, average, warnings);
     }
 
-    /// <summary>Дедлайн gRPC-виклику: після нього клієнт отримує DeadlineExceeded, і сервіс вважається недоступним.</summary>
-    private DateTime Deadline() => DateTime.UtcNow.AddSeconds(_options.ServiceTimeoutSeconds);
+    /// <summary>
+    /// Дедлайн gRPC-виклику: після нього клієнт отримує DeadlineExceeded, і сервіс вважається недоступним.
+    /// Лаб. 7: дедлайн охоплює ВСІ повторні спроби (retry), тому для критичних сервісів він більший.
+    /// </summary>
+    private DateTime Deadline(bool critical = false) => DateTime.UtcNow.AddSeconds(
+        critical ? _options.CriticalServiceTimeoutSeconds : _options.ServiceTimeoutSeconds);
 
     private long? ResolveReviewProductId(string title)
     {

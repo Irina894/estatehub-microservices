@@ -9,6 +9,7 @@
   <ItemGroup>
     <PackageReference Include="Aspire.StackExchange.Redis.DistributedCaching" Version="13.6.4" />
     <PackageReference Include="Grpc.AspNetCore" Version="2.85.0" />
+    <PackageReference Include="Grpc.AspNetCore.HealthChecks" Version="2.85.0" />
     <PackageReference Include="Swashbuckle.AspNetCore" Version="6.9.0" />
     <!-- Потрібен, щоб dotnet ef працював зі startup-project Catalog.Api -->
     <PackageReference Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.0">

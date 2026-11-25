@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -99,6 +100,10 @@ public static class Extensions
                 .AddRuntimeInstrumentation()
                 // Лаб. 6: власні метрики кешу кожного сервісу (cache.hits / cache.misses / cache.invalidations ...)
                 .AddMeter("Catalog.Cache", "Deals.Cache", "Reviews.Cache", "Aggregator.Cache")
+                // Лаб. 7: бізнес-метрики сервісів (IMeterFactory, назви збігаються з Meter у <Service>.Api/Metrics)
+                .AddMeter("Deals.Api", "Catalog.Api", "Reviews.Api")
+                // Лаб. 7: метрики Polly (retry, circuit breaker, timeout) з Microsoft.Extensions.Http.Resilience
+                .AddMeter("Polly")
                 // Лаб. 6: вбудовані метрики gRPC (кількість і тривалість викликів, повідомлення)
                 .AddMeter("Grpc.AspNetCore.Server", "Grpc.Net.Client"))
             .WithTracing(tracing =>
@@ -133,16 +138,40 @@ public static class Extensions
     public static TBuilder AddDefaultHealthChecks<TBuilder>(this TBuilder builder) where TBuilder : IHostApplicationBuilder
     {
         builder.Services.AddHealthChecks()
-            .AddCheck("self", () => HealthCheckResult.Healthy(), ["live"]);
+            .AddCheck("self", () => HealthCheckResult.Healthy(), [HealthTags.Live]);
 
         return builder;
     }
 
+    /// <summary>
+    /// Лаб. 7: /health/live (процес живий, без зовнішніх залежностей) і /health/ready
+    /// (усі перевірки з тегом "ready": БД, Redis, gRPC) - у ВСІХ середовищах, відповідь JSON з деталями.
+    /// /health і /alive лишаються в Development для сумісності з Лаб. 5.
+    /// </summary>
     public static WebApplication MapDefaultEndpoints(this WebApplication app)
     {
+        app.MapHealthChecks("/health/live", new HealthCheckOptions
+        {
+            Predicate = r => r.Tags.Contains("live"),
+            ResponseWriter = HealthResponseWriter.WriteAsync
+        });
+
+        app.MapHealthChecks("/health/ready", new HealthCheckOptions
+        {
+            Predicate = r => r.Tags.Contains("ready"),
+            ResponseWriter = HealthResponseWriter.WriteAsync,
+            // Degraded (напр. недоступний Redis) -> 200: сервіс працює, просто повільніше. Unhealthy -> 503.
+            ResultStatusCodes =
+            {
+                [HealthStatus.Healthy] = StatusCodes.Status200OK,
+                [HealthStatus.Degraded] = StatusCodes.Status200OK,
+                [HealthStatus.Unhealthy] = StatusCodes.Status503ServiceUnavailable
+            }
+        });
+
         if (app.Environment.IsDevelopment())
         {
-            app.MapHealthChecks(HealthEndpointPath);
+            app.MapHealthChecks(HealthEndpointPath, new HealthCheckOptions { ResponseWriter = HealthResponseWriter.WriteAsync });
             app.MapHealthChecks(AlivenessEndpointPath, new HealthCheckOptions
             {
                 Predicate = r => r.Tags.Contains("live")

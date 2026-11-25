@@ -25,27 +25,33 @@ var redis = builder.AddRedis("redis")
 // ---- Мікросервіси: ім'я ресурсу = логічне ім'я для service discovery ----
 var deals = builder.AddProject<Projects.Deals_Api>("deals-api")
     .WithReference(dealsDb).WaitFor(dealsDb)
-    .WithReference(redis).WaitFor(redis);
+    .WithReference(redis).WaitFor(redis)
+    .WithHttpHealthCheck("/health/ready");      // Лаб. 7: Dashboard показує Healthy/Unhealthy за readiness
 
 var catalog = builder.AddProject<Projects.Catalog_Api>("catalog-api")
     .WithReference(catalogDb).WaitFor(catalogDb)
-    .WithReference(redis).WaitFor(redis);
+    .WithReference(redis).WaitFor(redis)
+    .WithHttpHealthCheck("/health/ready");
 
 var reviews = builder.AddProject<Projects.Reviews_WebApi>("reviews-api")
     .WithReference(reviewsDb).WaitFor(reviewsDb)
-    .WithReference(redis).WaitFor(redis);
+    .WithReference(redis).WaitFor(redis)
+    .WithHttpHealthCheck("/health/ready");
+    // Для демонстрації retry/circuit breaker: .WithEnvironment("FaultInjection__FailureRate", "0.7")
 
 // ---- Aggregator: gRPC-клієнт сервісів (https://<ім'я>) + кеш агрегатів у Redis ----
 var aggregator = builder.AddProject<Projects.Platform_Aggregator>("aggregator")
     .WithReference(deals).WithReference(catalog).WithReference(reviews)
     .WaitFor(deals).WaitFor(catalog).WaitFor(reviews)
-    .WithReference(redis).WaitFor(redis);
+    .WithReference(redis).WaitFor(redis)
+    .WithHttpHealthCheck("/health/ready");
 
 // ---- Gateway: єдина точка входу на фіксованому порту 5000 (REST назовні, gRPC лише всередині платформи) ----
 builder.AddProject<Projects.Platform_ApiGateway>("gateway")
     .WithHttpEndpoint(port: 5000, name: "public")
     .WithReference(deals).WithReference(catalog).WithReference(reviews)
     .WithReference(aggregator)
-    .WaitFor(aggregator);
+    .WaitFor(aggregator)
+    .WithHttpHealthCheck("/health/ready");
 
 builder.Build().Run();
