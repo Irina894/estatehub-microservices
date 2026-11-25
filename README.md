@@ -771,3 +771,100 @@ bash scripts/benchmark-aggregator.sh <id заявки> 30
 - Код написаний без можливості скомпілювати в середовищі розробки асистента; перед здачею зробіть `dotnet build`.
 - Перевірки SQL/Mongo/Redis реалізовані власними `IHealthCheck` (без пакетів AspNetCore.HealthChecks.*), щоб не залежати від версій сторонніх пакетів.
 - Fault injection працює лише в Development і за замовчуванням нічого не ламає.
+
+
+---
+
+# Лаб. 08 — Асинхронна комунікація: RabbitMQ, події, споживачі
+
+## 1. Що додано і де це лежить
+
+| Частина | Де |
+|---|---|
+| RabbitMQ в AppHost (`AddRabbitMQ("messaging")`, `WithDataVolume`, `WithManagementPlugin`, `WithReference`/`WaitFor`) | `Platform.AppHost/AppHost.cs` (+ пакет `Aspire.Hosting.RabbitMQ`) |
+| Підключення `AddRabbitMQClient("messaging")` (IConnection, health check, телеметрія), `RabbitMQ.Client` 7.x | `Platform.EventBus/EventBusExtensions.cs`, `Platform.EventBus.csproj`, `Program.cs` сервісів |
+| Топологія (topic exchange, черги, bindings, DLX/DLQ) | `Platform.EventBus/Messaging/EventBusTopology.cs`, `EventBusDefinitions.cs` |
+| Незмінні integration events (`EventId`, `CorrelationId`, `SchemaVersion`) | `Platform.EventBus/Events/` |
+| `IEventPublisher` + `RabbitMqEventPublisher` (persistent, JSON) | `Platform.EventBus/Messaging/` |
+| Публікація після збереження в БД | `Services/Catalog/Catalog.Api/IntegrationEvents/CatalogEventPublisher.cs` + `PropertiesController` |
+| Consumer як `BackgroundService`, ack/nack, retry, DLQ | `Platform.EventBus/Messaging/EventConsumerService.cs` |
+| Обробники, `ProcessedEvents`, копія `Properties` у Deals | `Services/Deals/Deals.Api/IntegrationEvents/`, `db/p1/schema.sql` |
+| Обробник перейменування, `processedEvents` у Reviews | `Services/Reviews/Reviews.WebApi/IntegrationEvents/` |
+| Контекст трасування через брокер | `Platform.EventBus/Messaging/TracePropagation.cs`, `Platform.ServiceDefaults` (`AddSource`, `AddMeter`) |
+
+> Домен EstateHub: роль «Product» виконує **Property** (обʼєкт нерухомості), роль «Orders» — сервіс **Deals**.
+
+## 2. Топологія
+
+```
+Catalog.Api ──publish──▶ catalog-events (topic, durable)
+                           ├─ property.*        ─▶ deals.catalog-sync   ──┐ nack(requeue:false)
+                           └─ property.renamed  ─▶ reviews.catalog-sync  ──┤
+                                                                           ▼
+                                         catalog-events.dlx (direct) ── key = назва черги
+                                           ├─▶ deals.catalog-sync.dlq
+                                           └─▶ reviews.catalog-sync.dlq
+```
+
+| Routing key | Подія | Deals | Reviews |
+|---|---|---|---|
+| `property.created` | `PropertyCreatedEvent` | додає рядок у копію | пропускає (немає обробника, ack) |
+| `property.price_changed` | `PropertyPriceChangedEvent` | оновлює ціну (і назву) | не отримує (немає binding) |
+| `property.renamed` | `PropertyRenamedEvent` | оновлює назву | оновлює `productName` у відгуках |
+| `property.deleted` | `PropertyDeletedEvent` | `IsDeleted = 1` | не отримує |
+
+Черги `durable`, повідомлення `persistent`, топологія оголошується в коді при старті (повторне оголошення безпечне). DLX має тип **direct**, а ключ = назва вихідної черги — тоді відхилене повідомлення потрапляє лише у свою DLQ (з fanout воно б дублювалось в усі DLQ). Publisher теж оголошує черги відомих споживачів перед першою публікацією, щоб подія не пропала, поки споживач ще жодного разу не стартував.
+
+## 3. Потік події (зміна ціни)
+
+1. `PUT /api/properties/{id}/price` → `PropertyService` зберігає зміну (SaveChanges).
+2. Лише потім контролер викликає `CatalogEventPublisher` → `RabbitMqEventPublisher`: JSON (camelCase), `Persistent`, `MessageId = EventId`, `Type = <назва події>`, заголовки `x-correlation-id`, `x-schema-version`, `traceparent`.
+3. Exchange розкладає подію по чергах за bindings; кожен сервіс читає свою чергу незалежно (fan-out).
+4. `EventConsumerService` (BackgroundService, `autoAck: false`, `BasicQos(10)`) відновлює trace, десеріалізує, створює scope, викликає обробник за типом події, потім `BasicAck`.
+5. Обробник Deals в одній SQL-транзакції: `INSERT ProcessedEvents` (PK по `EventId`) + `MERGE PropertySnapshots`. Дублікат → помилка PK 2627 → подія пропускається.
+
+**Eventual consistency:** копія оновлюється не миттєво, а через долі секунди. Джерело істини — Каталог.
+
+## 4. Надійність
+
+| Ситуація | Реакція |
+|---|---|
+| Успіх | `BasicAck` |
+| Пошкоджений JSON, непідтримувана версія схеми, `PermanentEventException` | `BasicNack(requeue:false)` → DLX → DLQ (без повторів) |
+| Тимчасовий збій (БД недоступна, таймаут) | повідомлення публікується повторно з `x-retry-count + 1` (пауза 0.5 → 1 → 2 с), оригінал підтверджується; максимум **3** повтори, далі DLQ |
+| Тип події без обробника | warning + ack (сервіс просто не цікавиться цим типом) |
+| Зупинка застосунку | через `stoppingToken`; непідтверджене повідомлення повертається в чергу |
+| Брокер недоступний при старті | цикл повторів кожні 5 с, застосунок не падає |
+
+Повтор публікується **прямо в чергу споживача** (default exchange, routing key = назва черги), а не в topic exchange: інакше копію отримали б усі інші черги з тим самим binding.
+
+**Ідемпотентність.** Deals: таблиця `ProcessedEvents(EventId PK)`, запис у тій самій транзакції, що й зміна. Reviews: колекція `processedEvents` (`_id = EventId`); зміна `productName` за своєю природою ідемпотентна (`Set`), тому порядок «перевірка → зміна → позначка» безпечний. Транзакцію Mongo «зміна + позначка» зробити не можна: контейнер Aspire запускає MongoDB без replica set.
+
+**Out-of-order.** Deals: `MERGE ... WHEN MATCHED AND LastEventAt < @At` — застаріла подія не перезаписує свіжіші дані. Reviews: колекція `propertyNameVersions`. Події самодостатні (подія ціни несе й актуальну назву), тому пропуск застарілої події не губить дані.
+
+## 5. Трасування і метрики
+
+`traceparent` пишеться в заголовки при публікації (Producer-span `catalog-events publish`) і відновлюється у consumer-і (Consumer-span `<queue> process` з тегами `messaging.*`). `ActivitySource "Platform.Messaging"` додано в ServiceDefaults, тож у Dashboard → Traces один trace: **HTTP до Catalog → publish → process у deals-api / reviews-api → запити до БД**. У логах є `EventId`, `EventType`, `CorrelationId`, `Queue` (структуровані властивості).
+
+Метрики (`Meter "Platform.Messaging"`): `messaging.events.published` (тег `event_type`), `messaging.events.processed` (теги `queue`, `outcome` = ack/retry/dead_letter), `messaging.dlq.depth` (gauge, тег `queue`).
+
+## 6. Запуск і перевірка
+
+1. Один раз виконайте (або просто перезапустіть Deals: таблиці створюються автоматично) `db/p1/schema.sql` — додано `ProcessedEvents` і `PropertySnapshots`.
+2. `dotnet run --project Platform.AppHost`. У Dashboard ресурс **messaging** → посилання на Management UI (логін/пароль — у параметрах ресурсу). Там: exchange `catalog-events`, черги `deals.catalog-sync`, `reviews.catalog-sync` та їхні `.dlq`.
+3. **Ціна:** `GET /api/properties` → візьміть `id`; `PUT /api/properties/{id}/price` з `{"price": 123456}`. За кілька секунд `GET` на Deals `/api/property-snapshots` показує нову ціну; заявки (`/api/applications`) мають попередній `priceSnapshot`.
+4. **Назва:** `PUT /api/properties/{id}` (категорія, **нова** назва, опис, місто). У Deals змінюється назва в копії; у відгуках, чий `productName` дорівнював старій назві, — на нову.
+5. **Дублікат:** у Management UI → exchange `catalog-events` → *Publish message*: routing key `property.renamed`, Properties `type=PropertyRenamedEvent`, Payload
+   `{"eventId":"11111111-1111-1111-1111-111111111111","occurredAt":"2026-11-24T10:00:00Z","propertyId":"<guid>","oldTitle":"A","newTitle":"B","schemaVersion":1}`
+   двічі: у логах другий раз `Duplicate event ... skipped`.
+6. **DLQ:** те саме, але Payload `{broken json` → повідомлення в `*.catalog-sync.dlq`, у логах `Permanent failure ... sending to DLQ`.
+7. **Перезапуск споживача:** зупиніть `deals-api` у Dashboard, змініть кілька цін, запустіть знову — події чекали в черзі й обробляються.
+8. **Тимчасовий збій:** зупиніть контейнер `sql`, змініть ціну → у логах `retry 1/3 … 3/3`, потім DLQ; після запуску SQL повідомлення з DLQ можна перенести назад вручну.
+
+Скріншоти для здачі: Management UI (exchanges + черги з bindings), trace HTTP → Publish → Consume → DB, повідомлення в DLQ.
+
+## 7. Обмеження
+
+- **Transactional Outbox не реалізовано** (за бажанням): між збереженням у БД і публікацією застосунок може впасти — тоді подію буде втрачено. Збій публікації логується як помилка (`Failed to publish ...`), а клієнт не отримує 500 після вже збереженої зміни.
+- Reviews зіставляє відгуки за **старою назвою** (в Reviews обʼєкт має числовий `productId`, у Каталозі — Guid; та сама тимчасова відповідність, що й `ReviewProductMap` в Aggregator). Кеш окремих відгуків за id (`reviews:review:{id}`) оновиться за TTL, списки скидаються одразу.
+- Код написаний без можливості скомпілювати; перед здачею — `dotnet build`. Якщо restore не знайде версію пакета, виконайте `dotnet add package RabbitMQ.Client` / `Aspire.RabbitMQ.Client` у `Platform.EventBus` і `Aspire.Hosting.RabbitMQ` у `Platform.AppHost`.

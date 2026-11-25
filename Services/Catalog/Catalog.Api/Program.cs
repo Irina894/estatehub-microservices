@@ -6,7 +6,9 @@ using Catalog.Bll;
 using Catalog.Dal;
 using Catalog.Dal.Repositories;
 using Catalog.Dal.Seeding;
+using Catalog.Api.IntegrationEvents;
 using Microsoft.EntityFrameworkCore;
+using Platform.EventBus;
 using Platform.ServiceDefaults;
 using Serilog;
 
@@ -29,6 +31,10 @@ builder.Services.AddMemoryCache(o => o.SizeLimit = 10_000);
 // L2: Redis через Aspire (ім'я "redis" = ім'я ресурсу в AppHost; рядок підключення передає Aspire)
 // DisableHealthChecks: стандартна перевірка Aspire дала б Unhealthy; ми реєструємо власну (Degraded) нижче
 builder.AddRedisDistributedCache("redis", s => s.DisableHealthChecks = true);
+
+// ---- RabbitMQ (Лаб. 8): IConnection + health check через Aspire, IEventPublisher, публікація подій Каталогу ----
+builder.AddEventBus();
+builder.Services.AddScoped<CatalogEventPublisher>();
 
 // ---- BLL (сервіси з кеш-декораторами) ----
 builder.Services.AddCatalogBll();

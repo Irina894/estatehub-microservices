@@ -122,3 +122,35 @@ GO
 IF NOT EXISTS (SELECT 1 FROM sys.indexes WHERE name = 'IX_ApplicationRealtors_RealtorId')
     CREATE INDEX IX_ApplicationRealtors_RealtorId ON dbo.ApplicationRealtors (RealtorId);
 GO
+
+-- ============================================================
+-- Лаб. 8 — події (RabbitMQ)
+-- ============================================================
+
+-- ------------------------------------------------------------
+-- ProcessedEvents — ідемпотентність: EventId уже оброблених подій.
+-- INSERT у тій самій транзакції, що й бізнес-зміна; порушення PK (помилка 2627) = «уже оброблено».
+-- ------------------------------------------------------------
+IF OBJECT_ID('dbo.ProcessedEvents', 'U') IS NULL
+CREATE TABLE dbo.ProcessedEvents (
+    EventId     UNIQUEIDENTIFIER NOT NULL PRIMARY KEY,
+    ProcessedAt DATETIME2        NOT NULL DEFAULT SYSUTCDATETIME()
+);
+GO
+
+-- ------------------------------------------------------------
+-- PropertySnapshots — локальна копія довідника Properties з Каталогу (read model, політика дублювання Лаб. 01).
+-- Оновлюється подіями property.*; LastEventAt захищає від перезапису свіжіших даних запізнілою подією.
+-- Ціни/назви в Applications (PriceSnapshot, PropertyTitleSnapshot) - знімок на момент подання, події їх не змінюють.
+-- ------------------------------------------------------------
+IF OBJECT_ID('dbo.PropertySnapshots', 'U') IS NULL
+CREATE TABLE dbo.PropertySnapshots (
+    PropertyId  UNIQUEIDENTIFIER NOT NULL PRIMARY KEY,
+    Title       NVARCHAR(200)    NOT NULL,
+    Price       DECIMAL(18,2)    NULL,
+    City        NVARCHAR(100)    NULL,
+    Status      NVARCHAR(30)     NULL,
+    IsDeleted   BIT              NOT NULL DEFAULT 0,
+    LastEventAt DATETIME2        NOT NULL
+);
+GO

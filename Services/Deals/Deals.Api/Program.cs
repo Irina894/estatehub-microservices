@@ -1,5 +1,6 @@
 using Deals.Api.Grpc;
 using Deals.Api.HealthChecks;
+using Deals.Api.IntegrationEvents;
 using Deals.Api.Metrics;
 using Deals.Api.Middleware;
 using Deals.Bll.Caching;
@@ -39,6 +40,9 @@ builder.Services.AddMemoryCache(o => o.SizeLimit = 10_000);
 builder.AddRedisDistributedCache("redis", s => s.DisableHealthChecks = true);
 builder.Services.AddSingleton<CacheMetrics>();
 builder.Services.AddSingleton<ITwoLevelCache, TwoLevelCache>();
+
+// ---- RabbitMQ (Лаб. 8): споживач подій Каталогу, локальна копія Properties, ProcessedEvents ----
+builder.AddDealsEvents();
 
 // ---- BLL: справжні сервіси + декоратори з кешем ----
 builder.Services.AddScoped<ApplicationService>();

@@ -1,3 +1,4 @@
+using Catalog.Api.IntegrationEvents;
 using Catalog.Api.Metrics;
 using Catalog.Bll.Dtos;
 using Catalog.Bll.Services;
@@ -14,7 +15,8 @@ public class PropertiesController(
     IValidator<UpdatePropertyDto> updateValidator,
     IValidator<ChangePriceDto> priceValidator,
     IValidator<ChangeStatusDto> statusValidator,
-    CatalogMetrics metrics) : ApiControllerBase
+    CatalogMetrics metrics,
+    CatalogEventPublisher events) : ApiControllerBase
 {
     /// <summary>Список із фільтрами, сортуванням і пагінацією (усе в SQL).</summary>
     [HttpGet]
@@ -70,6 +72,7 @@ public class PropertiesController(
 
         var created = await service.CreateAsync(dto, ct);
         metrics.PropertyCreated();
+        await events.PropertyCreatedAsync(created);          // Лаб. 8: подія - лише після успішного збереження
         return CreatedAtAction(nameof(GetById), new { id = created.Id }, created);   // 201 + Location
     }
 
@@ -78,7 +81,9 @@ public class PropertiesController(
     public async Task<IActionResult> Update(Guid id, [FromBody] UpdatePropertyDto dto, CancellationToken ct)
     {
         if (await ValidateAsync(updateValidator, dto, ct) is { } bad) return bad;
-        await service.UpdateAsync(id, dto, ct);
+        var before = await service.GetByIdAsync(id, ct);     // стара назва потрібна події (404, якщо немає)
+        await service.UpdateAsync(id, dto, ct);              // збереження в БД
+        await events.RenamedAsync(id, before.Title, dto.Title.Trim());   // Лаб. 8: лише після успіху
         return NoContent();
     }
 
@@ -87,8 +92,10 @@ public class PropertiesController(
     public async Task<IActionResult> ChangePrice(Guid id, [FromBody] ChangePriceDto dto, CancellationToken ct)
     {
         if (await ValidateAsync(priceValidator, dto, ct) is { } bad) return bad;
-        await service.ChangePriceAsync(id, dto, ct);
+        var before = await service.GetByIdAsync(id, ct);     // стара ціна й актуальна назва для події
+        await service.ChangePriceAsync(id, dto, ct);         // збереження в БД
         metrics.PriceChanged();
+        await events.PriceChangedAsync(id, before.Title, before.Price, dto.Price);   // Лаб. 8: лише після успіху
         return NoContent();
     }
 
@@ -108,7 +115,9 @@ public class PropertiesController(
     [ProducesResponseType(StatusCodes.Status204NoContent)]
     public async Task<IActionResult> Delete(Guid id, CancellationToken ct)
     {
+        var before = await service.GetByIdAsync(id, ct);
         await service.DeleteAsync(id, ct);
+        await events.DeletedAsync(id, before.Title);          // Лаб. 8
         return NoContent();
     }
 

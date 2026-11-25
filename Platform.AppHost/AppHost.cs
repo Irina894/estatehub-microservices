@@ -22,20 +22,30 @@ var reviewsDb = mongo.AddDatabase("ReviewsDb");                       // Лаб.
 var redis = builder.AddRedis("redis")
                    .WithDataVolume();
 
+// Лаб. 8: RabbitMQ - брокер повідомлень. Облікові дані генерує Aspire; WithDataVolume зберігає черги й
+// повідомлення між перезапусками; Management UI (порт 15672) - у Dashboard, посилання на ресурсі "messaging".
+// Ім'я "messaging" = ім'я в builder.AddRabbitMQClient("messaging") у сервісах.
+var rabbit = builder.AddRabbitMQ("messaging")
+                    .WithDataVolume()
+                    .WithManagementPlugin();
+
 // ---- Мікросервіси: ім'я ресурсу = логічне ім'я для service discovery ----
 var deals = builder.AddProject<Projects.Deals_Api>("deals-api")
     .WithReference(dealsDb).WaitFor(dealsDb)
     .WithReference(redis).WaitFor(redis)
+    .WithReference(rabbit).WaitFor(rabbit)      // Лаб. 8: споживає події Каталогу (deals.catalog-sync)
     .WithHttpHealthCheck("/health/ready");      // Лаб. 7: Dashboard показує Healthy/Unhealthy за readiness
 
 var catalog = builder.AddProject<Projects.Catalog_Api>("catalog-api")
     .WithReference(catalogDb).WaitFor(catalogDb)
     .WithReference(redis).WaitFor(redis)
+    .WithReference(rabbit).WaitFor(rabbit)      // Лаб. 8: публікує події (catalog-events)
     .WithHttpHealthCheck("/health/ready");
 
 var reviews = builder.AddProject<Projects.Reviews_WebApi>("reviews-api")
     .WithReference(reviewsDb).WaitFor(reviewsDb)
     .WithReference(redis).WaitFor(redis)
+    .WithReference(rabbit).WaitFor(rabbit)      // Лаб. 8: споживає події Каталогу (reviews.catalog-sync)
     .WithHttpHealthCheck("/health/ready");
     // Для демонстрації retry/circuit breaker: .WithEnvironment("FaultInjection__FailureRate", "0.7")
 

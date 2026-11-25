@@ -104,6 +104,8 @@ public static class Extensions
                 .AddMeter("Deals.Api", "Catalog.Api", "Reviews.Api")
                 // Лаб. 7: метрики Polly (retry, circuit breaker, timeout) з Microsoft.Extensions.Http.Resilience
                 .AddMeter("Polly")
+                // Лаб. 8: метрики подій (опубліковано / оброблено / глибина DLQ)
+                .AddMeter("Platform.Messaging")
                 // Лаб. 6: вбудовані метрики gRPC (кількість і тривалість викликів, повідомлення)
                 .AddMeter("Grpc.AspNetCore.Server", "Grpc.Net.Client"))
             .WithTracing(tracing =>
@@ -117,6 +119,7 @@ public static class Extensions
                 tracing
                     .AddSource(builder.Environment.ApplicationName)   // власні spans сервісу
                     .AddSource("EstateHub.*")                         // ActivitySource бізнес-операцій (EstateHub.Deals тощо)
+                    .AddSource("Platform.Messaging")                  // Лаб. 8: Publish / Consume spans (RabbitMQ)
                     .AddSource(MongoActivitySource)                   // команди MongoDB (Reviews)
                     .AddAspNetCoreInstrumentation(options =>
                         options.Filter = ctx =>

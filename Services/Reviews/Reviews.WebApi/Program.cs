@@ -1,6 +1,7 @@
 using Reviews.Application;
 using Reviews.WebApi.Grpc;
 using Reviews.WebApi.HealthChecks;
+using Reviews.WebApi.IntegrationEvents;
 using Reviews.WebApi.Metrics;
 using Reviews.Infrastructure;
 using Reviews.Infrastructure.Seeding;
@@ -21,6 +22,9 @@ builder.AddRedisDistributedCache("redis", s => s.DisableHealthChecks = true);
 
 builder.Services.AddApplication();   // MediatR + behaviors кешу
 builder.Services.AddInfrastructure(builder.Configuration);
+
+// ---- RabbitMQ (Лаб. 8): споживач подій Каталогу - оновлює productName у відгуках ----
+builder.AddReviewsEvents();
 
 // ---- gRPC (контракт Protos/reviews.proto) + interceptor логування з ServiceDefaults ----
 builder.Services.AddServiceGrpc();
